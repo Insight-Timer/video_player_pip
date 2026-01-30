@@ -212,11 +212,13 @@ public class VideoPlayerPipPlugin: NSObject, FlutterPlugin, AVPictureInPictureCo
       return
     }
     
-    // If we already have a valid PiP controller, return success
+    // IMPORTANT: Always clean up and recreate the PiP controller.
+    // When the user navigates away and comes back, a NEW video player is created,
+    // so we need a new PiP controller connected to the new player.
+    // The old controller would be pointing to the old (disposed) player.
     if pipController != nil {
-      NSLog("VideoPlayerPip: PiP controller already prepared")
-      completion(true)
-      return
+      NSLog("VideoPlayerPip: Cleaning up existing PiP controller before creating new one")
+      cleanupPipController()
     }
     
     // Find the AVPlayerLayer
