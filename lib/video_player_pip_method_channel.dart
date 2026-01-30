@@ -12,9 +12,7 @@ class MethodChannelVideoPlayerPip extends VideoPlayerPipPlatform {
   @override
   Future<bool> isPipSupported() async {
     try {
-      final isSupported = await methodChannel.invokeMethod<bool>(
-        'isPipSupported',
-      );
+      final isSupported = await methodChannel.invokeMethod<bool>('isPipSupported');
       return isSupported ?? false;
     } on PlatformException catch (e) {
       debugPrint('Error checking PiP support: ${e.message}');
@@ -55,6 +53,17 @@ class MethodChannelVideoPlayerPip extends VideoPlayerPipPlatform {
       return result ?? false;
     } on PlatformException catch (e) {
       debugPrint('Error checking PiP mode: ${e.message}');
+      return false;
+    }
+  }
+
+  @override
+  Future<bool> preparePip(int playerId) async {
+    try {
+      final result = await methodChannel.invokeMethod<bool>('preparePip', {'playerId': playerId});
+      return result ?? false;
+    } on PlatformException catch (e) {
+      debugPrint('Error preparing PiP: ${e.message}');
       return false;
     }
   }

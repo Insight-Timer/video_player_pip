@@ -1,15 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
+import 'src/video_player_controller.dart';
 import 'video_player_pip_platform_interface.dart';
-
-export 'video_player_pip.dart';
-export 'video_player_pip_platform_interface.dart' show VideoPlayerPipPlatform;
-
-// Export the PiP-enabled VideoPlayerController that supports view type selection
-export 'package:video_player/video_player.dart';
-export 'src/extensions.dart';
 
 /// A Flutter plugin that adds Picture-in-Picture (PiP) functionality to the video_player package.
 ///
@@ -18,8 +11,7 @@ export 'src/extensions.dart';
 class VideoPlayerPip {
   static const MethodChannel _channel = MethodChannel('video_player_pip');
 
-  static final VideoPlayerPipPlatform _platform =
-      VideoPlayerPipPlatform.instance;
+  static final VideoPlayerPipPlatform _platform = VideoPlayerPipPlatform.instance;
 
   /// Checks if the device supports PiP mode
   ///
@@ -52,24 +44,14 @@ class VideoPlayerPip {
   /// await controller.initialize();
   /// await VideoPlayerPip.enterPipMode(controller, width: 300, height: 200);
   /// ```
-  static Future<bool> enterPipMode(
-    VideoPlayerController controller, {
-    int? width,
-    int? height,
-  }) {
+  static Future<bool> enterPipMode(VideoPlayerController controller, {int? width, int? height}) {
     if (controller.textureId == VideoPlayerController.kUninitializedTextureId) {
-      debugPrint(
-        'VideoPlayerPip: Cannot enter PiP mode with uninitialized controller',
-      );
+      debugPrint('VideoPlayerPip: Cannot enter PiP mode with uninitialized controller');
       return Future.value(false);
     }
 
     // iOS implementation uses native PiP
-    return _platform.enterPipMode(
-      controller.textureId,
-      width: width,
-      height: height,
-    );
+    return _platform.enterPipMode(controller.textureId, width: width, height: height);
   }
 
   /// Exits Picture-in-Picture mode if currently active.
@@ -84,6 +66,32 @@ class VideoPlayerPip {
   /// Returns `true` if in PiP mode, or `false` otherwise.
   static Future<bool> isInPipMode() {
     return _platform.isInPipMode();
+  }
+
+  /// Prepares the PiP controller early while app is active (iOS only).
+  ///
+  /// This creates the AVPictureInPictureController with
+  /// canStartPictureInPictureAutomaticallyFromInline=true but does NOT start PiP immediately.
+  /// iOS will automatically start PiP when the user goes home (swipes up/presses home button).
+  ///
+  /// IMPORTANT: Call this method when video starts playing, while the app is fully active.
+  /// This ensures the PiP controller is ready before the user goes to background.
+  ///
+  /// On Android, this method does nothing and returns false (Android handles PiP differently).
+  ///
+  /// Returns `true` if the PiP controller was prepared successfully, `false` otherwise.
+  ///
+  /// Example:
+  /// ```dart
+  /// // Call when video starts playing
+  /// await VideoPlayerPip.preparePip(controller);
+  /// ```
+  static Future<bool> preparePip(VideoPlayerController controller) {
+    if (controller.textureId == VideoPlayerController.kUninitializedTextureId) {
+      debugPrint('VideoPlayerPip: Cannot prepare PiP with uninitialized controller');
+      return Future.value(false);
+    }
+    return _platform.preparePip(controller.textureId);
   }
 
   /// Stream of PiP mode state changes.
@@ -111,11 +119,7 @@ class VideoPlayerPip {
   /// - [height]: Desired height of the PiP window (in pixels)
   ///
   /// Returns `true` if the operation was successful, or `false` otherwise.
-  Future<bool> togglePipMode(
-    VideoPlayerController controller, {
-    int? width,
-    int? height,
-  }) async {
+  Future<bool> togglePipMode(VideoPlayerController controller, {int? width, int? height}) async {
     final bool isInPip = await isInPipMode();
 
     if (isInPip) {

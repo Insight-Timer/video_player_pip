@@ -49,6 +49,20 @@ public class VideoPlayerPipPlugin: NSObject, FlutterPlugin, AVPictureInPictureCo
       NSLog("VideoPlayerPip: isInPipMode query = \(isInPipMode)")
       result(isInPipMode)
       
+    case "preparePip":
+      // NEW: Prepare PiP controller early while app is active (iOS only)
+      // This creates the AVPictureInPictureController with canStartPictureInPictureAutomaticallyFromInline=true
+      // but does NOT start PiP immediately. iOS will auto-start PiP when user goes home.
+      guard let args = call.arguments as? [String: Any],
+            let playerId = args["playerId"] as? Int else {
+        NSLog("VideoPlayerPip: preparePip failed - Invalid arguments")
+        result(FlutterError(code: "INVALID_ARGUMENTS", message: "Missing playerId", details: nil))
+        return
+      }
+      
+      NSLog("VideoPlayerPip: Preparing PiP controller for playerId: \(playerId)")
+      preparePipController(playerId: playerId, completion: result)
+      
     default:
       NSLog("VideoPlayerPip: Method not implemented: \(call.method)")
       result(FlutterMethodNotImplemented)
@@ -181,6 +195,92 @@ public class VideoPlayerPipPlugin: NSObject, FlutterPlugin, AVPictureInPictureCo
     pipController = nil
   }
   
+  /**
+   * Prepare the PiP controller EARLY while the app is fully active.
+   * This creates the AVPictureInPictureController with canStartPictureInPictureAutomaticallyFromInline=true
+   * but does NOT start PiP immediately.
+   * iOS will automatically start PiP when the user presses the home button.
+   * 
+   * IMPORTANT: This must be called while the app is in foreground (foregroundActive state).
+   */
+  private func preparePipController(playerId: Int, completion: @escaping FlutterResult) {
+    NSLog("VideoPlayerPip: preparePipController called for playerId: \(playerId)")
+    
+    if !isPipSupported() {
+      NSLog("VideoPlayerPip: PiP not supported by the device")
+      completion(false)
+      return
+    }
+    
+    // If we already have a valid PiP controller, return success
+    if pipController != nil {
+      NSLog("VideoPlayerPip: PiP controller already prepared")
+      completion(true)
+      return
+    }
+    
+    // Find the AVPlayerLayer
+    NSLog("VideoPlayerPip: Searching for AVPlayerLayer for playerId: \(playerId)")
+    guard let playerLayer = findAVPlayerLayer(playerId: playerId) else {
+      NSLog("VideoPlayerPip: Could not find player layer for ID: \(playerId)")
+      completion(false)
+      return
+    }
+    
+    NSLog("VideoPlayerPip: Found AVPlayerLayer: \(playerLayer)")
+    
+    // Check if player is ready
+    guard let player = playerLayer.player else {
+      NSLog("VideoPlayerPip: AVPlayerLayer has no player set")
+      completion(false)
+      return
+    }
+    
+    NSLog("VideoPlayerPip: Player status: \(player.status.rawValue), currentItem: \(player.currentItem != nil ? "exists" : "nil")")
+    
+    // Create and configure the PiP controller (but don't start PiP)
+    if #available(iOS 14.0, *) {
+      NSLog("VideoPlayerPip: Creating AVPictureInPictureController for preparation (not starting PiP)")
+      
+      if AVPictureInPictureController.isPictureInPictureSupported() {
+        // Clean up any existing controller
+        cleanupPipController()
+        
+        pipController = AVPictureInPictureController(playerLayer: playerLayer)
+        pipController?.delegate = self
+        
+        // CRITICAL: Enable automatic PiP when user goes home
+        if #available(iOS 14.2, *) {
+          NSLog("VideoPlayerPip: Setting canStartPictureInPictureAutomaticallyFromInline to true")
+          pipController?.canStartPictureInPictureAutomaticallyFromInline = true
+        }
+        
+        // Allow PiP during interactive playback
+        if #available(iOS 15.0, *) {
+          NSLog("VideoPlayerPip: Setting requiresLinearPlayback to false")
+          pipController?.requiresLinearPlayback = false
+        }
+        
+        // Set up observation for PiP state changes
+        observationToken = pipController?.observe(\.isPictureInPictureActive, options: [.new]) { [weak self] (controller, change) in
+          guard let self = self, let newValue = change.newValue else { return }
+          NSLog("VideoPlayerPip: isPictureInPictureActive changed to \(newValue)")
+          self.isInPipMode = newValue
+          self.channel?.invokeMethod("pipModeChanged", arguments: ["isInPipMode": newValue])
+        }
+        
+        NSLog("VideoPlayerPip: PiP controller prepared successfully. iOS will auto-start PiP when user goes home.")
+        completion(true)
+      } else {
+        NSLog("VideoPlayerPip: Cannot create PiP controller - not supported")
+        completion(false)
+      }
+    } else {
+      NSLog("VideoPlayerPip: iOS version < 14.0, cannot create PiP controller")
+      completion(false)
+    }
+  }
+  
   private func exitPipMode(completion: @escaping FlutterResult) {
     NSLog("VideoPlayerPip: exitPipMode called, isInPipMode: \(isInPipMode), pipController: \(String(describing: pipController))")
     if isInPipMode, pipController != nil {
@@ -213,19 +313,32 @@ public class VideoPlayerPipPlugin: NSObject, FlutterPlugin, AVPictureInPictureCo
   
   /**
    * Get the key window using a more modern approach that works on iOS 13+
+   * FIXED: Include both foregroundActive AND foregroundInactive states.
+   * When the app is transitioning to background, the scene state changes to foregroundInactive,
+   * so we need to include it to find the window during PiP initialization.
    */
   private func getKeyWindow() -> UIWindow? {
     if #available(iOS 13.0, *) {
+      // IMPORTANT: Include both foregroundActive and foregroundInactive states
+      // During app lifecycle transitions (e.g., when user swipes home), the scene
+      // state changes to foregroundInactive before going to background.
+      // We need to find the window in both states to properly initialize PiP.
       let scenes = UIApplication.shared.connectedScenes
-        .filter { $0.activationState == .foregroundActive }
+        .filter { $0.activationState == .foregroundActive || $0.activationState == .foregroundInactive }
         .compactMap { $0 as? UIWindowScene }
       
-      NSLog("VideoPlayerPip: Found \(scenes.count) active window scenes")
+      NSLog("VideoPlayerPip: Found \(scenes.count) active/inactive window scenes")
       
       if let windowScene = scenes.first {
-        let windows = windowScene.windows.filter { $0.isKeyWindow }
-        NSLog("VideoPlayerPip: Found \(windows.count) key windows in the first scene")
-        return windows.first
+        // First try to find the key window
+        let keyWindows = windowScene.windows.filter { $0.isKeyWindow }
+        NSLog("VideoPlayerPip: Found \(keyWindows.count) key windows in the first scene")
+        if let keyWindow = keyWindows.first {
+          return keyWindow
+        }
+        // Fallback: return the first window if no key window found
+        NSLog("VideoPlayerPip: No key window found, trying first window. Total windows: \(windowScene.windows.count)")
+        return windowScene.windows.first
       }
       return nil
     } else {

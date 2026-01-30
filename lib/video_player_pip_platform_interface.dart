@@ -42,4 +42,11 @@ abstract class VideoPlayerPipPlatform extends PlatformInterface {
   Future<bool> isInPipMode() {
     throw UnimplementedError('isInPipMode() has not been implemented.');
   }
+
+  /// Prepares the PiP controller early while app is active (iOS only).
+  /// This creates the AVPictureInPictureController with canStartPictureInPictureAutomaticallyFromInline=true
+  /// but does NOT start PiP immediately. iOS will auto-start PiP when user goes home.
+  Future<bool> preparePip(int playerId) {
+    throw UnimplementedError('preparePip() has not been implemented.');
+  }
 }
