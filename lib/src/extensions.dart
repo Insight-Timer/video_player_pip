@@ -1,4 +1,5 @@
 import '../video_player_pip.dart';
+import 'video_player_controller.dart';
 
 extension VideoPlayerControllerExtension on VideoPlayerController {
   /// Checks if the device supports PiP mode.
